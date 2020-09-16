@@ -1,6 +1,7 @@
 //Code and project description http://www.raspibo.org/wiki/index.php?title=HotAirGun
 
 // include the library code:
+#include <Arduino.h>
 #include <Wire.h>
 #include <CtrlPanel.h>
 #include <EEPROM.h>
@@ -199,6 +200,10 @@ const uint8_t TempCurve[] = {   //target temp   //time to mantain temp
   180             //temperature after welding
 };
 */
+
+void MCPintCallBack();
+void DefVal();
+signed int TempC();
 
 void HandleMCPInterrupt() {
   detachInterrupt(ArdMCPInterrupt);
