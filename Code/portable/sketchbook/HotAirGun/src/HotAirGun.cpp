@@ -3,8 +3,46 @@
 // include the library code:
 #include <Arduino.h>
 #include <Wire.h>
-#include <CtrlPanel.h>
+//#include <CtrlPanel.h>
 #include <EEPROM.h>
+#include <SPI.h>
+#include <TFT_ST7735.h> 
+
+//TFT
+const uint8_t SCREEN_WIDTH  = ST7735_TFTWIDTH; //160;                                          //  display width, in pixels
+const uint8_t SCREEN_HEIGHT = ST7735_TFTHEIGHT; //128;                                          //  display height, in pixels
+const uint8_t FONT_WIDTH    = 8;
+const uint8_t FONT_HEIGHT   = 8;
+const char DEGREE_CHAR      = 248; //176
+const char FAN_CHAR         = 70;//15; //70
+const char POWER_CHAR       = 80;//232; //80
+
+class DSPL : public TFT_ST7735 {
+    public:
+        DSPL(void) : TFT_ST7735() { }
+        void    init(void);
+        void    clear(void)       { TFT_ST7735::fillScreen(0x5AEB); setCharCursor(0, 0);}
+        void    setCharCursor(int16_t x, int16_t y)   { setCursor((x)*FONT_WIDTH, (y)*FONT_HEIGHT);}
+    private:
+        char 	temp_units;
+
+};
+
+void DSPL::init(void) {
+    clear();
+    TFT_ST7735::init();
+    TFT_ST7735::setRotation(1);
+    TFT_ST7735::fillScreen(0x5AEB); // grey color code
+    TFT_ST7735::setCursor(0, 0, 1); // Set "cursor" at top left corner of display (0,0) and select font 1
+    TFT_ST7735::setTextColor(TFT_WHITE);
+    TFT_ST7735::setTextColor(TFT_WHITE,TFT_BLACK);
+    TFT_ST7735::setTextFont(1);
+    TFT_ST7735::setTextSize(1); 
+	  temp_units = 'C';
+}
+
+DSPL       	disp;
+
 
 //Debug
 #define SerialPlot
@@ -67,7 +105,7 @@
 
 
 //I2cController vars definition
-CtrlPanelLib contr(0x20);	// Connect via i2c, default address #0 (A0-A2 not jumpered)
+//CtrlPanelLib contr(0x20);	// Connect via i2c, default address #0 (A0-A2 not jumpered)
 #define POTDIVIDER		4	// Encoder tick divider for sensibilty regulation
 #define CONTR_NOEVENT	0	// No event detected
 #define CONTR_SCROLL	1	// Encoder movement detected -Z > read Pot value
@@ -343,10 +381,10 @@ void ModParMenu() {
     }
     InitPar = true;
     OldModVal = ModVal + 1;
-    contr.setCursor(0, 1);
-    contr.print(ModVal);
-    //contr.setCursor(3, 1);
-    contr.print(" ==>");
+    disp.setCharCursor(0, 1);
+    disp.print(ModVal);
+    //disp.setCharCursor(3, 1);
+    disp.print(" ==>");
   }
   else {                   //Second: check if value is valid
     if (Menu == 41) ModVal = ModVal + (Pot * 100);
@@ -369,10 +407,10 @@ void ModParMenu() {
     }
   }
   if (OldModVal != ModVal) {
-    contr.setCursor(7, 1);
-    contr.print("   ");
-    contr.setCursor(8, 1);
-    contr.print(ModVal);
+    disp.setCharCursor(7, 1);
+    disp.print("   ");
+    disp.setCharCursor(8, 1);
+    disp.print(ModVal);
     OldModVal = ModVal;
   }
 }
@@ -537,26 +575,26 @@ bool checkemptyeeprom() {
 
 bool checkerror() {
   if (ActTemp == -200) {
-    contr.setCursor(0, 1);
-    contr.print("E: MAX6675 timeout");
+    disp.setCharCursor(0, 1);
+    disp.print("E: MAX6675 timeout");
     Serial.println("Error: MAX6675 IC not responding!");
     return 1;
   }
   if (ActTemp == -100) {
-    contr.setCursor(0, 1);
-    contr.print("E: Temp sens. disc");
+    disp.setCharCursor(0, 1);
+    disp.print("E: Temp sens. disc");
     Serial.println("Error: Temperature sensor disconnected!");
     return 1;
   }
   if (ActTemp >= MaxT) {
-    contr.setCursor(0, 1);
-    contr.print("E: Temp > Max_T");
+    disp.setCharCursor(0, 1);
+    disp.print("E: Temp > Max_T");
     Serial.println("Error: Temperature too high > MaxT!");
     return 1;
   }
   if (millis() > 3000 && millis() >= LastPIDTime + 2000 && StartStop == 1) {
-    contr.setCursor(0, 1);
-    contr.print("E: Zero cross KO");
+    disp.setCharCursor(0, 1);
+    disp.print("E: Zero cross KO");
 #if defined F_Debug
     Serial.print(millis());
     Serial.print("\t");
@@ -654,15 +692,15 @@ void setup() {
   Serial.begin(2000000);
   Serial.print("Startup");
  // #endif					// set up the LCD's number of rows and columns:
-  contr.begin(16, 2);									// Print a message to the LCD.
-  contr.clear();
-  contr.setBacklight(HIGH);
-  contr.setCursor(0, 0);
-  contr.print("Hot Air Gun");
-  contr.setCursor(0, 1);
-  contr.print(String(__DATE__));
-  contr.print("Wait....");
+  disp.init();
+  disp.setCharCursor(0, 0);
+  disp.print("Hot Air Gun");
+  disp.setCharCursor(0, 1);
+  disp.print(String(__DATE__));
+  disp.print("Wait....");
+  
   contr.buzz(500, 1000);
+
   if (checkemptyeeprom() == 0) {
     DefVal();
 #if defined F_Debug
@@ -802,41 +840,41 @@ void loop() {
   }
 #endif
   if (EditMode && (Menu != MenuOld)) {
-    if (MenuOld != 100) contr.clear();
-    contr.setCursor(0, 0);
+    if (MenuOld != 100) disp.clear();
+    disp.setCharCursor(0, 0);
     MenuDec = Menu / 10;
     MenuUnit = Menu % 10;
-    if (EditPar && !SavePar) contr.print("Mod ");
-    if (SaveConf) contr.print("Save ");
-    contr.print(&MenuVoice[MenuDec][MenuUnit][1]);  //Start printing lcd from second char to hide first Menu control char
+    if (EditPar && !SavePar) disp.print("Mod ");
+    if (SaveConf) disp.print("Save ");
+    disp.print(&MenuVoice[MenuDec][MenuUnit][1]);  //Start printing lcd from second char to hide first Menu control char
     MenuOld = Menu;
   }
   else if ( !EditMode && millis() > LcdUpd ) {    //Home Menu special handler for live update var every second
-    contr.clear();
-    contr.print("T:");
-    contr.print(ActTemp);
-    contr.print("/");
-    contr.print(TempGun);
-    contr.setCursor(10, 0);
-    contr.print("A:");
-    contr.print(AirFlow);
-    contr.print("%");
-    contr.setCursor(12, 1);
+    disp.clear();
+    disp.print("T:");
+    disp.print(ActTemp);
+    disp.print("/");
+    disp.print(TempGun);
+    disp.setCharCursor(10, 0);
+    disp.print("A:");
+    disp.print(AirFlow);
+    disp.print("%");
+    disp.setCharCursor(12, 1);
     if (StartStop == 1) {
-	if (WeldCycle) contr.print("WelC");
-	else contr.print("Weld");
+	if (WeldCycle) disp.print("WelC");
+	else disp.print("Weld");
     }
     else {
-      contr.print("Stop");
+      disp.print("Stop");
     }
-    contr.setCursor(0, 1);
+    disp.setCharCursor(0, 1);
     if (WeldCycle > 0) {
-      contr.print("o:");
-      contr.print(OpTime/ZeroCrossSec);
+      disp.print("o:");
+      disp.print(OpTime/ZeroCrossSec);
     }
     else {
-      contr.print("t:");
-      contr.print(OpTime/ZeroCrossSec);
+      disp.print("t:");
+      disp.print(OpTime/ZeroCrossSec);
     }
     LcdUpd = millis() + TimeLcd;
   }
@@ -900,13 +938,13 @@ void loop() {
 
   if (SaveConf) {
     if (Pot != PotOld) {
-      contr.setCursor(13, 1);
+      disp.setCharCursor(13, 1);
       if (Pot > 1) {
-        contr.print("YES");
+        disp.print("YES");
         Pot = 2;
       }
       if (Pot < -1) {
-        contr.print("NO ");
+        disp.print("NO ");
         Pot = -2;
       }
       PotOld = Pot;
@@ -922,8 +960,8 @@ void loop() {
       SaveConf = 0;
       InitPar = 0;
       MenuOld = 0;
-      contr.setCursor(0, 1);
-      for (char i = 0; i <= 16; i++) contr.print(" ");
+      disp.setCharCursor(0, 1);
+      for (char i = 0; i <= 16; i++) disp.print(" ");
       contr.buzz(200, 1500);
     }
 
@@ -945,15 +983,15 @@ void loop() {
       SaveConf = 0;
       InitPar = 0;
       MenuOld = 0;
-      contr.setCursor(0, 1);
-      for (char i = 0; i <= 16; i++) contr.print(" ");
+      disp.setCharCursor(0, 1);
+      for (char i = 0; i <= 16; i++) disp.print(" ");
       contr.buzz(500, 200);
     }
   }
 
   if (EncClick && !SaveConf && MenuVoice[MenuDec][MenuUnit][0] == 'a') { //On MenuVoice=Exit goto Menu tilet`
-    contr.setCursor(0, 1);
-    contr.print("Are You Sure");
+    disp.setCharCursor(0, 1);
+    disp.print("Are You Sure");
     SaveConf = 1;
     EncClick = 0;
     PotDivider = 3;
@@ -975,8 +1013,8 @@ void loop() {
   if (OpTime < AutoOffTime ) {  //Shutdown if inactive, other settings are required.....
     TempGun = 0;
     TempGunApp = 0;
-    contr.setCursor(0, 1);
-    contr.print("Auto Power OFF");
+    disp.setCharCursor(0, 1);
+    disp.print("Auto Power OFF");
     AirFlow = 100;
     AirFlowApp = 100;
     //Serial.println("Auto Power OFF");
