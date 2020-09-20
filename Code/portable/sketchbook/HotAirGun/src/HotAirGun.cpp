@@ -8,6 +8,9 @@
 #include <SPI.h>
 #include <TFT_ST7735.h> 
 
+#include <Adafruit_MAX31855.h>
+#include <CommonControls.h>
+
 //TFT
 const uint8_t SCREEN_WIDTH  = ST7735_TFTWIDTH; //160;                                          //  display width, in pixels
 const uint8_t SCREEN_HEIGHT = ST7735_TFTHEIGHT; //128;                                          //  display height, in pixels
@@ -41,13 +44,49 @@ void DSPL::init(void) {
 	  temp_units = 'C';
 }
 
-DSPL       	disp;
+class CtrLib {
+  public:
+    uint8_t readRegister(uint8_t);
+  	void buzz(long,uint16_t);
+    void WriteLed(uint8_t Led, uint8_t value);
+    // void setupEncoder(uint8_t EN_A, uint8_t EN_B, uint8_t EN_C);
+    // void setIntBtn(uint8_t pin);
+    // void setIntCross(uint8_t btn[], uint8_t btnNum );
 
+    // void setMCPType(uint8_t mcptype) {
+
+    // _mcpType = mcptype;
+
+    // }
+
+
+  private:
+   
+};
+
+void CtrLib::buzz(long,uint16_t) {
+}
+
+void CtrLib::WriteLed(uint8_t Led, uint8_t value) {
+}
+
+
+
+#define MAXCS A1
+const uint8_t R_MAIN_PIN	= 3;                                            // Rotary encoder main pin. Do not change!
+const uint8_t R_SECD_PIN	= 7;                                            // Rotary encoder secondary pin
+const uint8_t R_BUTN_PIN	= 5;         
+
+BUTTON     	rotButton(R_BUTN_PIN);
+ENCODER    	rotEncoder(R_MAIN_PIN, R_SECD_PIN);
+DSPL       	disp;
+CtrLib      contr;
+Adafruit_MAX31855 thermocouple(MAXCS);
 
 //Debug
-#define SerialPlot
+//#define SerialPlot
 //#define F_Debug			//Uncomment to enable the "fast debug" use for event
-#define S_Debug			//Uncomment to enable the schedule debug
+//#define S_Debug			//Uncomment to enable the schedule debug
 #define TDebug		1000
 
 //Parameter definition
@@ -114,25 +153,26 @@ uint8_t ControllerEvent = CONTR_NOEVENT; //Store encoder events
 int TicPot = 0;           		//Used for cont of single step of rotary encoder
 int PotDivider = POTDIVIDER;    	//Divider for TicPot for best regulation of sensitivity
 int Pot , PotOld;
-char ActEnc, OldEnc;   			//Diff between encoder positions
-uint8_t PortA, IntA;
+char  OldEnc;   			//Diff between encoder positions
+int ActEnc=0;
+//uint8_t PortA, IntA;
 int ModVal, OldModVal;     				//Temporary var to store parameter during set
 boolean InitPar = false;    		//Used by Menus
 boolean EncClick, P1, P2, P3; //P4, P5;
 
 //Pin definition
 #define ZEROCINTPIN 2	//Interrupt pin used by zero crossing detector circuit DO NOT CHANGE
-#define MCPINTPIN 	3	//Interrupt pin used by I2C controller (MCP23107)      DO NOT CHANGE
-#define SO			5	//MAX6675 signal serial out aka MISO on SPI
-#define CS			6	//MAX6675 signal Chip select
-#define SCK			7	//MAX6675 signal clock
+//#define MCPINTPIN 	3	//Interrupt pin used by I2C controller (MCP23107)      DO NOT CHANGE
+//#define SO			A1	//MAX6675 signal serial out aka MISO on SPI
+//#define CS			A1	//MAX6675 signal Chip select
+//#define SCK			7	//MAX6675 signal clock
 #define GATE		9 	//TRIAC gate
 #define EMERG_RELAY 8	//Emergency and power relay
-#define P_FAN_PWM	11  //Define pin D10 for pwm signal for gun
-#define _STARTSTOP	12  //Pin used for activation of hot air production (also used for magnetic sensor on gun)
-#define DEBUGLED	13  //Led used for debug purpose
-#define HOLDER_SENS A3	//Tilt sensor for gun
-#define FOOT_SWITCH A4	// Switch to anable the welding curve
+#define P_FAN_PWM	4  //Define pin D10 for pwm signal for gun
+#define STARTSTOP	A0  //Pin used for activation of hot air production (also used for magnetic sensor on gun)
+//#define DEBUGLED	13  //Led used for debug purpose
+#define HOLDER_SENS A2	//Tilt sensor for gun
+#define FOOT_SWITCH A3	// Switch to anable the welding curve
 
 
 //PWM and timers vars
@@ -140,7 +180,7 @@ boolean EncClick, P1, P2, P3; //P4, P5;
 #define sbi(port,bit) (port)|=(1<<(bit))  //Fast toggle routine for pins
 
 //Interrupts vars
-byte MCPIntPin = MCPINTPIN; // Interrupts from the MCP will be handled by this PIN on Arduino
+//byte MCPIntPin = MCPINTPIN; // Interrupts from the MCP will be handled by this PIN on Arduino
 byte ArdMCPInterrupt = 1; // ... and this interrupt vector
 byte ZeroCIntPin = ZEROCINTPIN; // Interrupts from zero crossing circuit
 byte ArdZeroCInterrupt = 0; // ... and this interrupt vector
@@ -154,7 +194,7 @@ long	RelayStartTime = 0;  //Relay time start: wait some time after start button 
 int		AutoOffTime;    //Time for auto shutdown in seconds
 int		OpTime = 0;   //operation Timer normally equal to millis(), used for temperature welding curve time calculation, displayed in home Menu
 long	LastPIDTime = 0;  //Last time PID was calculated
-long	TimeDeb;
+long	TimeDeb = 1000;
 
 //PID vars
 char KI, KD, KP;    //Used by PID
@@ -243,21 +283,29 @@ void MCPintCallBack();
 void DefVal();
 signed int TempC();
 
+void rotEncChange(void) {
+	rotEncoder.changeINTR();
+   AwakenByMCPInterrupt = true;
+    OpTime = 0;
+}
+/*
 void HandleMCPInterrupt() {
-  detachInterrupt(ArdMCPInterrupt);
+  //detachInterrupt(ArdMCPInterrupt);
   //A    |¯¯|__|¯¯|__|¯
   //B    ¯|__|¯¯|__|¯¯|__  +
   AwakenByMCPInterrupt = false;
   //uint8_t PortA = 0;
-  PortA = contr.readRegister(MCP23017_GPIOA);
-  IntA =  contr.readRegister(MCP23017_INTCAPA);
-  ActEnc = ((PortA & 0b110) >> 1 );
+  //PortA = contr.readRegister(MCP23017_GPIOA);
+  //IntA =  contr.readRegister(MCP23017_INTCAPA);
+  //ActEnc = ((PortA & 0b110) >> 1 );
 
   //Pot = 0;
   AwakenByMCPInterrupt = false;
   //PortA = contr.readRegister(MCP23017_GPIOA);
 
-  ActEnc = ((PortA & 0b110) >> 1 );
+  //ActEnc = ((PortA & 0b110) >> 1 );
+  ActEnc = digitalRead(R_MAIN_PIN);
+  ActEnc = (ActEnc << 1) | digitalRead(R_SECD_PIN);
   switch (ActEnc) {
     case 0: //00
       if (OldEnc == 2) TicPot++; //10
@@ -285,27 +333,29 @@ void HandleMCPInterrupt() {
     Pot--;
     TicPot = 0;
   }
-  if (!bitRead(IntA, 0) && bitRead(PortA, 0)) EncClick = 1;	else EncClick = 0;
-  if (!bitRead(IntA, 3) && bitRead(PortA, 3)) StartStop = 1; 					//P1 = 1;			else P1 = 0;
-  if (!bitRead(IntA, 5) && bitRead(PortA, 5)) {StartStop = 0; StartWlC = 0;}	//P2 = 1;			else P2 = 0;
-  if (!bitRead(IntA, 7) && bitRead(PortA, 7)) StartWlC = 1;						//else P3 = 0;
-  if (StartWlC) {																//Disable panel navigation during the WLC cycle
-	  Pot = 0;
-	  EncClick = 0;
-  }
+//  if (!bitRead(IntA, 0) && bitRead(PortA, 0)) EncClick = 1;	else EncClick = 0;
+//  if (!bitRead(IntA, 3) && bitRead(PortA, 3)) StartStop = 1; 					//P1 = 1;			else P1 = 0;
+//  if (!bitRead(IntA, 5) && bitRead(PortA, 5)) {StartStop = 0; StartWlC = 0;}	//P2 = 1;			else P2 = 0;
+//  if (!bitRead(IntA, 7) && bitRead(PortA, 7)) StartWlC = 1;						//else P3 = 0;
+//  if (StartWlC) {																//Disable panel navigation during the WLC cycle
+//	  Pot = 0;
+//	  EncClick = 0;
+//  }
   //cleanMCPInterrupts();
   //we set callback for the arduino INT handler.
   OpTime = 0;
-  attachInterrupt(ArdMCPInterrupt, MCPintCallBack, FALLING);
+  //attachInterrupt(ArdMCPInterrupt, MCPintCallBack, FALLING);
 }
-
-void MCPintCallBack() {     //Low priority interrupt, the callback simply set a variable for interrupt handling fuctions in main loop.
+*/
+/*void MCPintCallBack() {     //Low priority interrupt, the callback simply set a variable for interrupt handling fuctions in main loop.
   AwakenByMCPInterrupt = true;
-}
+}*/
+
+static volatile bool triacOn=false;
 
 void ZeroCCallBack() {      //High priority interrupt, only minimal operation and no time consumption routine
   detachInterrupt(ArdZeroCInterrupt);
-  sbi(PINB, 5);             //Defined by macro on top for fast toggle pin D13 = DEBUGLED
+  //sbi(PINB, 5);             //Defined by macro on top for fast toggle pin D13 = DEBUGLED
   PhaseCounter++;
   if (PhaseCounter >= PidTime ) {
     PhaseCounter = 0;
@@ -319,9 +369,12 @@ void ZeroCCallBack() {      //High priority interrupt, only minimal operation an
     TCNT_timer=64538; // 4ms
     TCNT_timer=63538; // 8ms
   */
+ if(false == triacOn)
+ {
   TCNT1H = TCNT_timer >> 8;
   TCNT1L = TCNT_timer & 0x00FF;
   TIMSK1 |= (1 << TOIE1);
+  }
   //we set callback for the arduino INT handler.
   attachInterrupt(ArdZeroCInterrupt, ZeroCCallBack, RISING);
 }
@@ -332,33 +385,36 @@ ISR(TIMER1_OVF_vect) { //timer1 overflow
     TCNT1L = 0xFF - PULSE;
     if (StartStop == 1 && Pid_Res > 10 && AirFlow > D_AirFlowMin && TempGun != 0) { //Check if StartStop var is active > welding active and some controls to vars
       digitalWrite(GATE, HIGH); //turn on TRIAC gate
+      triacOn=true;
     }
   } else {
     digitalWrite(GATE, LOW); //turn off TRIAC gate
     TIMSK1 &= ~(1 << TOIE1);
+    triacOn=false;
   }
 }
 
 #if defined S_Debug
 void Debug() {
   GG = ~GG;
-  contr.WriteLed(LED_4, GG);
-  //Serial.println(Menu,DEC);
-  //Serial.println(WeldCycle,DEC);
+ // contr.WriteLed(LED_4, GG);
+  Serial.println(Menu,DEC);
+  Serial.println(WeldCycle,DEC);
   //digitalWrite(LedV, !(digitalRead(LedV)));
-  // Serial.println("Debug Programma");
-  // Serial.print("MenuDec");
-  // Serial.println(MenuDec);
-  // Serial.print("MenuUnit");
-  // Serial.println(MenuUnit );
-  // Serial.print("Pot");
-  // Serial.println(Pot);
-
-  // Serial.print(KP, DEC);
-  // Serial.print("\t");
-  // Serial.println(KI, DEC);
-  // Serial.print("\t");
-  // Serial.println(KD, DEC);
+   Serial.println("Debug Programma");
+   Serial.print("MenuDec ");
+   Serial.println(MenuDec);
+   Serial.print("MenuUnit ");
+   Serial.println(MenuUnit );
+   //Serial.print("Pot ");
+   //Serial.println(Pot);
+//Serial.print("ActEnc ");
+//Serial.println(ActEnc);
+   Serial.print(KP, DEC);
+   Serial.print("\t");
+   Serial.println(KI, DEC);
+   Serial.print("\t");
+   Serial.println(KD, DEC);
 }
 #endif
 
@@ -501,6 +557,10 @@ void weldCurve() {
 void PID (void){    //Controllo PID
   //if (OpTime & 1) ActTemp = TempC();
   ActTemp = TempC();
+  if(ActEnc < 0)
+  {
+    ActEnc = LastActTemp;
+  }
   //Int_Res = Dev_Res = 0;
   Err += (TempGun - ActTemp);
   if (Err > Pid_Out_Max / KP) Err = Pid_Out_Max / KP;
@@ -518,10 +578,10 @@ void PID (void){    //Controllo PID
   LastActTemp = ActTemp;
 
   //TCNT_timer = 63060 + Pid_Res;
-  TCNT_timer = 63400 + Pid_Res;
+  TCNT_timer = /*63400*/ 62600 + Pid_Res;
   LastPIDTime = millis();
 }
-
+/*
 byte TC_Read(void) {
   int i;
   byte d = 0;
@@ -536,10 +596,23 @@ byte TC_Read(void) {
     _delay_ms(1);
   }
   return d;
-}
+}*/
+
+double rawTemp=0;
 
 signed int TempC() {
-  uint16_t v;
+  double c = thermocouple.readCelsius();
+  rawTemp=c;
+    if (isnan(c)){
+        return -1;
+    }
+    else
+    {
+        return (signed int)c;
+    }
+
+  
+ /* uint16_t v;
   digitalWrite(CS, LOW);
   _delay_ms(1);
   v = TC_Read();
@@ -557,7 +630,7 @@ signed int TempC() {
     //return -100;
   }
   v >>= 3;
-  return v * 0.25;
+  return v * 0.25;*/
 }
 
 bool checkemptyeeprom() {
@@ -689,7 +762,7 @@ void DefVal() {
 
 void setup() {
   //#ifdef F_Debug || defined S_Debug || SerialPlot
-  Serial.begin(2000000);
+  Serial.begin(115200);
   Serial.print("Startup");
  // #endif					// set up the LCD's number of rows and columns:
   disp.init();
@@ -752,25 +825,38 @@ void setup() {
   //uint8_t btnCross[BTN_NUM] = { BTN_1, BTN_2, BTN_3, BTN_4, BTN_5}; // Five button on cross disposition, setup function
   //contr.setIntCross(btnCross, BTN_NUM);
   delay(1000);
+      pinMode(R_MAIN_PIN, INPUT_PULLUP);
+    pinMode(R_SECD_PIN, INPUT_PULLUP);
+    pinMode(R_BUTN_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ZeroCIntPin), ZeroCCallBack,  FALLING);
-  attachInterrupt(digitalPinToInterrupt(MCPIntPin),   MCPintCallBack, FALLING);
+  //attachInterrupt(digitalPinToInterrupt(MCPIntPin),   MCPintCallBack, FALLING);
+  attachInterrupt(digitalPinToInterrupt(R_MAIN_PIN), rotEncChange,   CHANGE);
   //interrupts();
-  HandleMCPInterrupt();
+ // HandleMCPInterrupt();
   Menu = Menu_HOME;
   pinMode(HOLDER_SENS, INPUT_PULLUP);
   pinMode(GATE, OUTPUT);
   pinMode(EMERG_RELAY, OUTPUT);
   pinMode(P_FAN_PWM, OUTPUT);
 #ifdef STARTSTOP
-  pinMode(STARTSTOP, INPUT);
+  pinMode(STARTSTOP, INPUT_PULLUP);
 #endif
-  pinMode(DEBUGLED, OUTPUT);
+ // pinMode(DEBUGLED, OUTPUT);
   //define pin modes MAX6675
-  pinMode(CS, OUTPUT);
-  pinMode(SCK, OUTPUT);
-  pinMode(SO, INPUT);
-  digitalWrite(CS, HIGH);
+  //pinMode(CS, OUTPUT);
+  //pinMode(SCK, OUTPUT);
+  //pinMode(SO, INPUT);
+  //digitalWrite(CS, HIGH);
 
+thermocouple.begin();
+rotEncoder.init();
+rotEncoder.reset(0, -1, 1, 1, 0, false);
+	rotButton.init();
+
+ disp.setCharCursor(0, 4);
+  disp.print("Temp ");
+  disp.print(thermocouple.readCelsius());
+delay(5500);
   //Set TMR1 related registers, used for Triac driving
   //Useful info at http://forum.arduino.cc/index.php?topic=94100.0
   //TIMSK1 Timer Interrupt Mask Register
@@ -795,10 +881,14 @@ void setup() {
   //TCCR2B – Timer/Counter2 Control Register B
   //CS22:0: Clock Select -> CS22 Clock quartz/64 by prescaler. Required by 8 bit counter.
   TCCR2B = _BV(CS22);
-
+Serial.println("Startup ... end");
 }
 
 void loop() {
+  static uint16_t loopCnt=0;
+  //Serial.print("loopCnt ");
+  //Serial.println( loopCnt++);
+  
   //  if (checkerror()==1) {                  //  Error and emergengy handling function
   //    TempGun=0;
   //    AirFlow=100;
@@ -830,9 +920,29 @@ void loop() {
   }
   startstop();
   if (AwakenByMCPInterrupt) {
-    HandleMCPInterrupt();   //Handle low priority interrupt (user interface: encoder, switch) if fired
+    //HandleMCPInterrupt();   //Handle low priority interrupt (user interface: encoder, switch) if fired
+     Pot = rotEncoder.read();
+     ControllerEvent = CONTR_SCROLL;
+    AwakenByMCPInterrupt = false;
+   // Serial.print("rotary ");
+   // Serial.println(Pot);
   }
-  OCR2A = map(AirFlow, 0, 100, 0, 255); //Adapt percent value to 0-255 scale for timer and apply to OCR2A register for pwm generation.
+
+  uint8_t bStatus = rotButton.buttonCheck();
+switch (bStatus) {
+		case 1:                                     						// short press
+			EncClick = 1;
+			break;
+		case 0:                                    						// Not pressed
+    case 2:                                      						// long press;
+		default:
+			break;
+	}
+
+
+
+
+  OCR2B = map(AirFlow, 0, 100, 0, 255); //Adapt percent value to 0-255 scale for timer and apply to OCR2A register for pwm generation.
 #if defined S_Debug
   if (millis() > TimeDeb) {
     TimeDeb = (millis() + TDebug);
@@ -861,8 +971,8 @@ void loop() {
     disp.print("%");
     disp.setCharCursor(12, 1);
     if (StartStop == 1) {
-	if (WeldCycle) disp.print("WelC");
-	else disp.print("Weld");
+	    if (WeldCycle) disp.print("WelC");
+	    else disp.print("Weld");
     }
     else {
       disp.print("Stop");
@@ -876,6 +986,9 @@ void loop() {
       disp.print("t:");
       disp.print(OpTime/ZeroCrossSec);
     }
+    disp.setCharCursor(0, 4);
+     disp.print("rawT:");
+      disp.print(rawTemp);
     LcdUpd = millis() + TimeLcd;
   }
 
@@ -905,6 +1018,7 @@ void loop() {
       Menu = Pot + Menu;
     }
     Pot = 0;
+    rotEncoder.reset(0,-1,1,1,0,false);
     ControllerEvent = CONTR_NOEVENT;
   };
 
@@ -924,6 +1038,7 @@ void loop() {
     EncClick = 0;
     PotDivider = 3;
     Pot = 2;
+    rotEncoder.reset(2,-2,2,1,0,false);
     PotOld = 0;
 #ifdef F_Debug
     Serial.print("Save");
@@ -942,10 +1057,12 @@ void loop() {
       if (Pot > 1) {
         disp.print("YES");
         Pot = 2;
+        rotEncoder.reset(2,-2,2,1,0,false);
       }
       if (Pot < -1) {
         disp.print("NO ");
         Pot = -2;
+        rotEncoder.reset(-2,-2,2,1,0,false);
       }
       PotOld = Pot;
     }
@@ -996,6 +1113,7 @@ void loop() {
     EncClick = 0;
     PotDivider = 3;
     Pot = 2;
+    rotEncoder.reset(2,-2,2,1,0,false);
     PotOld = 0;
     SetMacEn = 1;
   }
@@ -1003,6 +1121,7 @@ void loop() {
     Menu = MenuDec = MenuUnit = 0;
     EditMode = EditPar = SaveConf = 0;
     EncClick = 0;
+    rotEncoder.reset(0,-1,1,1,0,false);
   }
 
 
@@ -1020,7 +1139,7 @@ void loop() {
     //Serial.println("Auto Power OFF");
     if (ActTemp <= TStop) {
       AirFlow = 0;  //when air on gun is lower than TStop temp cut off pwm on fan
-      OCR2A = 0;
+      OCR2B = 0;
       Serial.println("Fan stop");
       delay(500);
       exit(0);
